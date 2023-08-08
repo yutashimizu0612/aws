@@ -125,6 +125,142 @@ Run "sudo yum update" to apply all updates.
 
 * EC2作成のネットワーク設定で"パブリック IP の自動割り当て"が無効になって作成されていた。結果として、パブリックIPが設定されていなかった。
 
+## EC2インスタンスにnginxをインストールして起動させる
+
+### nginxインストール
+
+#### そもそもnginxとは
+
+* オープンソースのWebサーバ用のソフトウェア
+* 特徴
+  * 処理性能重視
+  * 高い並行処理性能
+  * メモリ消費量を抑えやすい
+
+#### インストール手順
+
+yumだとインストールできないため、amazon-linux-extrasを使う
+
+```
+[ec2-user@ip- ~]$ which amazon-linux-extras
+/usr/bin/amazon-linux-extras
+```
+
+インストールする
+
+```
+[ec2-user@ip- ~]$ sudo amazon-linux-extras install nginx1
+Installing nginx
+...
+...
+
+総ダウンロード容量: 2.4 M
+インストール容量: 6.7 M
+Is this ok [y/d/N]: y
+...
+...
+完了しました!
+```
+
+インストールできたか確認する
+
+```
+[ec2-user@ip- ~]$ nginx -v
+nginx version: nginx/1.22.1
+```
+
+### nginxを起動する
+
+```
+[ec2-user@ip- ~]$ sudo systemctl start nginx
+```
+
+起動したかを確認する
+
+```
+[ec2-user@ip- ~]$ systemctl status nginx
+● nginx.service - The nginx HTTP and reverse proxy server
+   Loaded: loaded (/usr/lib/systemd/system/nginx.service; disabled; vendor preset: disabled)
+   Active: active (running) since 火 2023-08-08 05:07:28 UTC; 52s ago
+  Process: 2096 ExecStart=/usr/sbin/nginx (code=exited, status=0/SUCCESS)
+  Process: 2091 ExecStartPre=/usr/sbin/nginx -t (code=exited, status=0/SUCCESS)
+  Process: 2090 ExecStartPre=/usr/bin/rm -f /run/nginx.pid (code=exited, status=0/SUCCESS)
+ Main PID: 2098 (nginx)
+   CGroup: /system.slice/nginx.service
+           ├─2098 nginx: master process /usr/sbin/nginx
+           └─2099 nginx: worker process
+
+```
+
+### ブラウザから確認
+
+* EC2のドメインにアクセスすると、「このサイトにアクセスできません」となってしまった。
+* セキュリティグループを確認したところ、80,443のポートは共に開いている
+* ソースの部分に、IPv6（::/0）も指定する → 変わらず
+* [AWSで80ポートを開いてるのに【このサイトにアクセスできません】が出る](https://qiita.com/ichihara-development/items/6c84fb99311c1cc7159c)を参考に進める
+
+```
+$ netstat -tln
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State      
+tcp        0      0 0.0.0.0:111             0.0.0.0:*               LISTEN     
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN     
+tcp        0      0 127.0.0.1:25            0.0.0.0:*               LISTEN     
+tcp6       0      0 :::111                  :::*                    LISTEN     
+tcp6       0      0 :::22                   :::*                    LISTEN 
+```
+
+```
+[ec2-user@ip- ~]$ sudo nginx -s reload
+nginx: [error] open() "/run/nginx.pid" failed (2: No such file or directory)
+
+[ec2-user@ip- ~]$ sudo service nginx stop
+
+[ec2-user@ip- ~]$ sudo nginx -t
+
+[ec2-user@ip- ~]$ sudo service nginx start
+
+[ec2-user@ip- ~]$ systemctl status nginx
+
+-- 80ポートが開いた！
+[ec2-user@ip- ~]$ netstat -tln
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address           Foreign Address         State      
+tcp        0      0 0.0.0.0:111             0.0.0.0:*               LISTEN     
+tcp        0      0 0.0.0.0:80              0.0.0.0:*               LISTEN     
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN     
+tcp        0      0 127.0.0.1:25            0.0.0.0:*               LISTEN     
+tcp6       0      0 :::111                  :::*                    LISTEN     
+tcp6       0      0 :::80                   :::*                    LISTEN     
+tcp6       0      0 :::22                   :::*                    LISTEN    
+```
+
+* 再度、EC2インスタンスのオープンアドレスをコピペして、httpでアクセスすると、nginxのデフォルトページが表示された
+  * EC2インスタンス概要ページのリンクを踏むとhttpsになっており、「このサイトにアクセスできません」
+
+### nginxを停止する
+
+```
+[ec2-user@ip- ~]$ sudo nginx -s stop
+[ec2-user@ip- ~]$ systemctl status nginx
+● nginx.service - The nginx HTTP and reverse proxy server
+   Loaded: loaded (/usr/lib/systemd/system/nginx.service; disabled; vendor preset: disabled)
+   Active: inactive (dead)
+```
+
+### 用語
+
+* yum
+  * LinuxのRedHat系（CentOSなど）で利用されるパッケージ管理ツール
+* amazon-linux-extras
+  * Amazon Linux 2 インスタンスにある PHP、Python、Golang、MariaDB などのパッケージを管理するためのコマンド？
+* systemctlコマンド
+  * CentOSやRedhat7系から利用できる、systemd※1をコントロールするコマンド
+    * ※1 Unix系のコンピュータのシステムを起動するときにカーネルによって最初に起動されるプログラム
+  * systemctl status サービス名 / systemctl start サービス名
+* netstatコマンド
+  * ネットワーク関連の情報を確認するときのコマンド
+
 ## ポート
 
 どのアプリケーションが送受信をするのかを決めるための番号
