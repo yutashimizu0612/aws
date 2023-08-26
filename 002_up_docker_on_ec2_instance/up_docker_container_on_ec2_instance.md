@@ -94,6 +94,10 @@ networks:
 
 上記では、`sample_bridge`というカスタムブリッジネットワークを作成し、apiとdbコンテナがそのネットワークに接続するように設定している。この2つのコンテナは、互いのサービス名(api,db)で通信できる。
 
+docker-compose.ymlを複数に分けてるような場合（マイクロサービス的な設計の時にあるかも）にカスタムブリッジネットワークを使う。
+docker-compose.ymlを1つにつき、1つのブリッジネットワークが作成される。
+通常、異なるdocker-compose.ymlで作ったコンテナはネットワークが異なるため通信できない。しかし、カスタムブリッジネットワークを作るとそれができる。
+
 ```js
 app.get('/db', async (req, res) => {
   try {
@@ -125,6 +129,9 @@ app.get('/db', async (req, res) => {
 
 ## DockerFileの書き方
 
+各コマンドがレイヤーになっている
+変更が激しいものは後ろに持っていく。
+
 ```DockerFile
 # ベースとなるイメージを指定する
 FROM node:14.15.4-alpine3.10
@@ -140,11 +147,19 @@ COPY ./yarn.lock ./
 # シェルコマンドの実行
 RUN yarn install
 
+# hostのserverディレクトリを"/usr/src/app"にコピーする
+## パッケージインストールをした後にコピーすること
+## なぜなら、
+COPY . /usr/src/app
+
 # コンテナのポートの宣言
 # これを指定してもポートが公開されるわけではなく、ポートを公開するためには`docker run -p`や`docker-compose.yml`での指定が必要
 # あくまでもドキュメントとしての役割
 EXPOSE 8080
 
 # コンテナが起動したときに実行されるコマンド
+# docker run -it image /bin/bashなどで実行すると、CMDのコマンドは上書きされる
 CMD [ "yarn", "start" ]
+
+ENTRYPOINT
 ```
