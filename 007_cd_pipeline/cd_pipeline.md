@@ -16,7 +16,7 @@ phases:
       - aws --version
       # 環境変数の設定
       - AWS_ACCOUNT_ID=086959954524 # TODO: CodeBuildの環境変数として設定する
-      - ECR_ENDPOINT=${AWS_ACCOUNT_ID}.dkr.ecr.us-west-2.amazonaws.com
+      - ECR_ENDPOINT=${AWS_ACCOUNT_ID}.dkr.ecr.ap-northeast-1.amazonaws.com
       - REPOSITORY_URI=${ECR_ENDPOINT}/test-repos # ECRに作成済みのリポジトリを指定
       # コミットハッシュの先頭7桁をタグに利用する
       - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
@@ -77,13 +77,11 @@ AWSコンソールからCodeBuildページに行き、「ビルドプロジェ�
 
 | 環境 | | |
 | ---- | ---- | ---- |
-| 環境イメージ | カスタムイメージ | |
-| 環境タイプ | Linux | 今回使用するイメージはAMD64アーキテクチャ向けのため、環境タイプはLinuxを選択します。|
-| イメージレジストリ | Amazon ECR | |
-| ECRアカウント | 自分のECRアカウント | |
-| Amazon ECR レポジトリ | 任意のECRリポジトリ | |
-| Amazon ECR イメージ | latest | |
-| 🌟認証情報プルイメージ | AWS CodeBuild認証情報 | |
+| 環境イメージ | マネージド型イメージ | |
+| コンピューティング | EC2 | |
+| オペレーティングシステム | Amazon Linux | |
+| ランタイム | Standard | |
+| イメージ | amazonlinux2-x86_64-standard:5.0 | |
 | 🌟特権付与 | チェックする |  |
 | サービスロール | 新しいサービスロール | |
 | ロール名 | codebuild-nginx-test-build-service-role(自動入力のまま) | |
@@ -95,54 +93,67 @@ AWSコンソールからCodeBuildページに行き、「ビルドプロジェ�
 
 | アーティファクト | | |
 | ---- | ---- | ---- |
-| タイプ | アーティファクトなし | |
+| タイプ | アーティファクトなし | なしを選択するとS3に保存されません。CodePipelineを使う場合は次のステージに自動的に成果物(アーティファクト)が渡されるためS3に保存する必要はありません。 |
 
 上記の条件で、ビルドプロジェクトを作成します。
 
+### IAMポリシーの作成とロールへの追加
+
+ビルドプロジェクト作成時に併せて作成した`codebuild-nginx-test-build-service-role`に**ECRへのログインとイメージをプルするポリシー**を追加します。これによって、CodeBuildはECRにログインしてイメージをプルできるようになります。
+
+IAM > ポリシーからポリシーの作成を押します。
+
+JSONを選択し、下記を入力します。
+
+```json
+{
+	"Version": "2012-10-17",
+	"Statement": [
+		{
+			"Sid": "ECRPullPolicy",
+			"Effect": "Allow",
+            "Action": [
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage",
+                "ecr:BatchCheckLayerAvailability"
+            ],
+			"Resource": "arn:aws:ecr:ap-northeast-1:{your_account_id}:repository/{your_ecr_name}"
+		},
+        {
+            "Sid": "GetAuthToken",
+            "Effect": "Allow",
+            "Action": "ecr:GetAuthorizationToken",
+            "Resource": "*"
+        }
+	]
+}
+```
+
+ポリシー名を`TestReposECRPullPolicy`とし、ポリシーを作成します。
+
+`codebuild-nginx-test-build-service-role`のページに行き、許可を追加 > ポリシーのアタッチを選択します。
+
+### ビルドのテスト
+
+必要なポリシーをCodeBuildに持たせたので、今作成したCodeBuildが正しく動作するかを確認します。
+
+PROVISIONINGで失敗しました。**ECRのイメージをプルできていない**ことが原因のようです。
+
+```
+BUILD_CONTAINER_UNABLE_TO_PULL_IMAGE: Unable to pull customer's container image. CannotPullContainerError: Error response from daemon: pull access denied for {my_account_id}.dkr.ecr.ap-northeast-1.amazonaws.com/test-repos, repository does not exist or may require 'docker login': denied: User: CodeBuild
+```
+
+#### 🌟原因
+
+ビルドプロジェクト作成時に環境イメージに**カスタムイメージ**を選択し、自分でECRリポジトリやイメージを指定していたのが原因でした。
+
+環境イメージを**マネージド型イメージ**に変更して、再度ビルドすると成功しました。
+
+生成されたアーティファクトを確認してみようと思いましたが、どこにもありませんでした。
+
+ビルドプロジェクト作成時に**アーティファクトなし**を選択しているため、S3バケットにはアーティファクトは保存されないようです。
+
 ## CodeDeployの設定
-
-### アプリケーションの作成
-
-AWSコンソールからCodeDeployページに行き、「アプリケーションの作成」を押します。
-
-| アプリケーションの設定 | | |
-| ---- | ---- | ---- |
-| アプリケーション名 | nginx-test | |
-| コンピューティングプラットフォーム | Amazon ECS | |
-
-上記の条件で、アプリケーションを作成します。
-
-### 必要なロールの作成
-
-デプロイグループの作成時に**サービスロール**というものを指定する必要があります。
-
-ここには、**CodeDeployサービスが他のAWSサービスを操作するための権限を持つIAMロール**を指定します。
-
-IAMページから簡単に作成できるので、事前に作っておきます。
-
-IAM > ロール > ロールの作成を押します。
-
-| 信頼されたエンティティを選択 | | |
-| ---- | ---- | ---- |
-| 信頼されたエンティティタイプ | AWSのサービス | |
-| サービスまたはユースケース | CodeDeploy | |
-| ユースケース | CodeDeploy - ECS | |
-
-次へを押します。
-
-| 許可ポリシー | | |
-| ---- | ---- | ---- |
-| ポリシー名 | AWSCodeDeployRoleForECS | 自動選択されています |
-
-次へを押します。
-
-| 名前、確認、および作成 | | |
-| ---- | ---- | ---- |
-| ロール名 | CodeDeployRoleForECS | 任意 |
-
-このロールを引き受けるのはCodeDeployサービスなので、信頼ポリシーにもAWSCodeDeployが指定されています。
-
-ロールを作成します。
 
 ### ターゲットグループの作成
 
@@ -184,6 +195,38 @@ ALBと関連付けしているセキュリティグループを編集して、HT
 | タイプ | カスタムTCP |
 | ポート | 444 |
 
+### 必要なロールの作成
+
+この後ECSサービスを作成する際に、**サービスロール**というものを指定する必要があります。
+
+ここには、**CodeDeployサービスが他のAWSサービスを操作するための権限を持つIAMロール**を指定します。
+
+IAMページから簡単に作成できるので、事前に作っておきます。
+
+IAM > ロール > ロールの作成を押します。
+
+| 信頼されたエンティティを選択 | | |
+| ---- | ---- | ---- |
+| 信頼されたエンティティタイプ | AWSのサービス | |
+| サービスまたはユースケース | CodeDeploy | |
+| ユースケース | CodeDeploy - ECS | |
+
+次へを押します。
+
+| 許可ポリシー | | |
+| ---- | ---- | ---- |
+| ポリシー名 | AWSCodeDeployRoleForECS | 自動選択されています |
+
+次へを押します。
+
+| 名前、確認、および作成 | | |
+| ---- | ---- | ---- |
+| ロール名 | CodeDeployRoleForECS | 任意 |
+
+このロールを引き受けるのはCodeDeployサービスなので、信頼ポリシーにもAWSCodeDeployが指定されています。
+
+ロールを作成します。
+
 ### ECSサービスの作成
 
 ECSサービスを作成します。
@@ -200,21 +243,25 @@ ECSサービスを作成します。
 
 デプロイタイプを`ブルー/グリーンデプロイ(AWSCodeDeployを使用)`にすると、ロードバランシングのセクションでターゲットグループを2つ指定できるようになります。
 
-### デプロイグループの作成
-
-続いて、アプリケーションページからデプロイグループを作成します。
-
-| | | |
-| ---- | ---- | ---- |
-| デプロイグループ名 | nginx-test-deploy | |
-| サービスロール | CodeDeployRoleForECS | 上で作成したロールを指定します |
-| ECS クラスター名 | nginx-dev-cluster | |
-| ECS サービス名 | nginx-test-server | |
-
-| Load balancer | | |
-| ---- | ---- | ---- |
-| Load balancer | sample-alb | |
-| 本稼働リスナーポート | HTTP:80 | |
-| ターゲットグループ | ecs-target-group | |
+この条件で、ECSサービスを作成すると、CodeDeployのアプリケーションとデプロイグループが自動で作成されます。
 
 ## CodePipelineの設定
+
+AWSコンソールからCodePipelineページに行き、「パイプラインを作成する」を押します。
+
+| パイプラインの設定を選択する | | |
+| ---- | ---- | ---- |
+| パイプライン名 | nginx-test-deploy | |
+| 🌟パイプラインタイプ | V2 | パイプライントリガーをGitタグにするにはV2である必要があるため、V2を選択 |
+| サービスロール | 新しいサービスロール | |
+| ロール名 | AWSCodePipelineServiceRole-ap-northeast-1-nginx-test-deploy | 自動入力 |
+
+| ソースステージを追加する | | |
+| ---- | ---- | ---- |
+| ソースプロバイダー | GitHub(バージョン2) | |
+| リポジトリ名 | 該当のGitHubのリポジトリ | |
+| パイプライントリガー | Gitタグ | |
+| タグ > 含める | v* | `v1.0.1`などの形式で指定した場合のみにパイプラインを発動させるために指定 |
+| タグ > 除外する | 空欄 | |
+| デフォルトブランチ | main | |
+| 🌟出力アーティファクト形式 | CodePipelineのデフォルト | |
